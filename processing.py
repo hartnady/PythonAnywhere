@@ -4,10 +4,10 @@ from time import sleep
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_ENGINE_OPTIONS
-from flask_app2 import Job
+from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_ENGINE_OPTIONS, OPEN_AI_KEY
+from flask_app import Job
 
-openai.api_key = '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'
+openai.api_key = OPEN_AI_KEY
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URI, **SQLALCHEMY_ENGINE_OPTIONS
