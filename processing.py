@@ -4,7 +4,7 @@ from time import sleep
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_ENGINE_OPTIONS, OPEN_AI_KEY
+from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_ENGINE_OPTIONS, OPEN_AI_KEY, SLACK_API_KEY
 from flask_app import Job
 
 openai.api_key = OPEN_AI_KEY
@@ -48,11 +48,36 @@ def process_job(job_id):
         job = session.query(Job).filter_by(id=job_id).first()
         gpt_resp = gpt_max(job.message)
 
+        gpt_resp = gpt_resp.replace('\n','\n>')
+
         payload = {
-            "text": f"<@{job.user_id}> asked: {job.message}\n>{gpt_resp}"
+            "channel": f"{job.user_id}",
+            "blocks": [
+        		{
+        			"type": "section",
+        			"text": {
+        				"type": "mrkdwn",
+        				"text": f"<@{job.user_id}> asked: {job.message}\n>{gpt_resp}"
+        			},
+        			"accessory": {
+        				"type": "button",
+        				"text": {
+        					"type": "plain_text",
+        					"text": "Post to GPT Channel"
+        				},
+        				"value": "click_me_123",
+        				"action_id": "button-action"
+        			}
+        		}
+        	]
         }
 
-        response = requests.post(job.webhook_url, json=payload)
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": "Bearer " + SLACK_API_KEY
+        }
+
+        response = requests.post('https://slack.com/api/chat.postMessage', json=payload, headers=headers)
 
         if response.status_code == 200:
 
