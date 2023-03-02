@@ -1,11 +1,10 @@
 from datetime import datetime
 from flask import Flask, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
-
 from io import BytesIO, StringIO
 from pdfminer.high_level import extract_text_to_fp
 import pdfminer.layout
-import openai, json, traceback
+import openai, json, traceback, requests
 
 app = Flask(__name__)
 app.config.from_object('config')
@@ -65,6 +64,33 @@ def root_post():
 @app.route('/slack', methods=['GET'])
 def slack_get():
     return 'Welcome to GPT for Slack. Please POST x-www-form-urlencoded data to /slack/events to enqueue a GPT request.', 200
+
+@app.route('/slack/post_to_channel', methods=['POST'])
+def slack_post_to_channel_post():
+
+    mimetype = request.mimetype
+    if mimetype == 'application/x-www-form-urlencoded':
+        payload = request.form
+    else:
+        abort(500,description="This API only accepts mime-type of application/x-www-form-urlencoded")
+
+    if 'payload' not in payload: abort(500,description='"payload" value missing from form data')
+    #if 'user' not in payload['payload']: abort(500,description='"user" element missing from payload')
+    if 'message' not in payload['payload']: abort(500,description='"message" element missing from payload')
+
+    payload = payload['payload']
+    payload = json.loads(payload)
+    #user_id = payload['user']['id']
+    message_text = payload['message']['text']
+
+    outbound_payload = { "text": f"{message_text}" }
+
+    response = requests.post(slack_webhook_url, json=outbound_payload)
+
+    if response.status_code == 200:
+        return '', 200
+    else:
+        abort(500,description='Error posting to public channel via webhook.')
 
 @app.route('/slack/events', methods=['GET'])
 def slack_events_get():
