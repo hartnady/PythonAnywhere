@@ -4,7 +4,7 @@ import PyPDF2
 from pdfminer.high_level import extract_text_to_fp
 import pdfminer.layout
 import openai, transformers, json, traceback, requests
-openai.api_key = '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'
+openai.api_key = 'your_openai_api_key_here'
 
 app = Flask(__name__)
 app.config['DEBUG'] = True
