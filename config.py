@@ -13,6 +13,7 @@ SQLALCHEMY_TRACK_MODIFICATIONS = False
 SLACK_API_KEY = "your_slack_api_key_here"
 SLACK_WEBHOOK_URI = "your_slack_webhook_url_here"
 OPEN_AI_KEY = "your_open_ai_key_here"
+CHAT_BOT_USER_ID = "U04RH1Y8NLB"
 
 ERROR_SERVICE_SENDER = 'hartnady@gmail.com'
 ERROR_SERVICE_SENDER_TOKEN = 'your_gmail_sender_token_here'
