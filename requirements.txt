@@ -4,4 +4,4 @@ PyPDF2==1.26.0
 pdfminer.six==20221105
 transformers==4.25.1
 tokenizers==0.13.2
-openai==0.26.5
+openai==0.27.0
