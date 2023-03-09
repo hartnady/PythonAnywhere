@@ -53,10 +53,27 @@ def get_last_5_requests(user_id):
     prev_req_ids_str = ', '.join(prev_req_ids)
     return prev_req_ids_str
 
-def responder(job):
+def responder(job,timestamp=False):
     msg = job.message.replace('\n','\n>')
     resp = job.response.replace('\n','\n>')
-    return f"*Request:* `{job.id}`\n*IP & Timestamp*: `{job.slug}`\n*<@{job.user_id}> asked:*\n>{msg}\n*GPT Responded:*\n>{resp}"
+    if timestamp:
+        return f"*Request:* `{job.id}`\n*IP & Timestamp*: `{job.slug}`\n*<@{job.user_id}> asked:*\n>{msg}\n*GPT Responded:*\n>{resp}"
+    else:
+        return f"*Request:* `{job.id}`\n*<@{job.user_id}> asked:*\n>{msg}\n*GPT Responded:*\n>{resp}"
+
+def bot_is_member_of_channel(channel_id, bot_id, sak=slack_api_key):
+    form_headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": "Bearer " + sak
+    }
+    response = requests.get('https://slack.com/api/conversations.members',f'channel={channel_id}',headers=form_headers)
+    if response.status_code == 200:
+        resp_json = response.json()
+        if 'members' in resp_json:
+            for member_id in resp_json['members']:
+                if member_id == bot_id: return True
+
+    return False
 
 #======================
 #FLASK ROUTINGS (APIs):
@@ -105,14 +122,20 @@ def slack_post_to_channel_post():
     job_id = payload['actions'][0]['value']
     job = Job.query.filter_by(id=job_id).first()
 
-    outbound_payload = { "channel": f"{job.channel_id}", "text": responder(job) }
-
     headers = headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Authorization": "Bearer " + slack_api_key
     }
 
-    response = requests.post('https://slack.com/api/chat.postMessage', json=outbound_payload, headers=headers)
+    if bot_is_member_of_channel(job.channel_id, chat_bot_user_id, slack_api_key):
+        outbound_payload = { "channel": f"{job.channel_id}", "text": responder(job) }
+        response = requests.post('https://slack.com/api/chat.postMessage', json=outbound_payload, headers=headers)
+    elif job.channel_id[0] != 'C':
+        outbound_payload = { "text": "The GPT App can only post to channels, not to private chats between individuals." }
+        response = requests.post(job.webhook_url, json=outbound_payload, headers=headers)
+    else:
+        outbound_payload = { "text": "The GPT App cannot post to this channel as it is not a member. Please use `/invite @GPT` before attempting to use the 'Post to Channel' feature." }
+        response = requests.post(job.webhook_url, json=outbound_payload, headers=headers)
 
     if response.status_code == 200:
         return '', 200
@@ -134,19 +157,71 @@ def slack_events_post():
 
     if 'text' not in payload: abort(500,description='"text" value missing from form data')
     if 'user_id' not in payload: abort(500,description='"user_id" value missing from form data')
+    if 'response_url' not in payload: abort(500,description='"response_url" value missing from form data')
 
     text = payload['text']
     user_id = payload['user_id']
+    response_url = payload['response_url']
+
     if 'channel_id' in payload: channel_id = payload['channel_id']
 
-    if text.strip() == '':
-        return 'No prompt detected. Try again using syntax: `/gpt your question here` or `/gpt help` for help.', 200
+    #if text.strip() == '':
+    #    return 'No prompt detected. Try again using syntax: `/gpt your question here` or `/gpt help` for help.', 200
 
-    if text == 'help':
-        return_text =  ' \n>`/gpt [your_prompt]` will enqueue a *new* request with the GPT service. e.g. `/gpt give me a chocolate cake recipe`'
-        return_text += '\n>`/gpt [request_id]` will provide the status of a *previous request* e.g. `/gpt 255`'
-        return_text += '\n>`/gpt [request_id] [your_next_prompt]` will continue a *previous dialogue* e.g. `/gpt 255 now give me baking instructions`'
-        return_text += '\n>`/gpt share [request_id] with [slack_user]` will share your request with another user e.g. `/gpt share 255 with firstname.lastname`'
+    if text == 'modal' or text.strip() == '':
+        modal = {
+            "trigger_id": payload['trigger_id'],
+            "view": {
+            	"type": "modal",
+            	"title": { "type": "plain_text","text": "GPT Modal - Coming Soon!" },
+            	"submit": { "type": "plain_text", "text": "Submit" },
+            	"close": { "type": "plain_text", "text": "Cancel" },
+            	"blocks": [
+            		{ "type": "section", "text": { "type": "mrkdwn", "text": "This feature is not yet implemented but will be soon. Please select an operation type and prompt" } },
+            		{ "type": "input", "element": {
+            		        "type": "static_select",
+            		        "placeholder": { "type": "plain_text", "text": "Select an item", "emoji": True },
+            				"options": [
+            					{ "text": { "type": "plain_text", "text": "--None--", "emoji": True }, "value": "none" }, { "text": { "type": "plain_text", "text": "Translate to English", "emoji": True }, "value": "translate_en" },
+            					{ "text": { "type": "plain_text", "text": "Translate to Russian", "emoji": True }, "value": "translate_ru" },
+            					{ "text": { "type": "plain_text", "text": "Translate to Polish", "emoji": True }, "value": "translate_pl" },
+            					{ "text": { "type": "plain_text", "text": "Summarise the text", "emoji": True }, "value": "summarize" },
+            					{ "text": { "type": "plain_text", "text": "Fix the grammar", "emoji": True }, "value": "fix-grammar" },
+            					{ "text": { "type": "plain_text", "text": "Create a proposal outline", "emoji": True }, "value": "proposal" },
+            					{ "text": { "type": "plain_text", "text": "Fix the code", "emoji": True }, "value": "fix-code" },
+            					{ "text": { "type": "plain_text", "text": "Write a unit test for this code", "emoji": True }, "value": "unit-test" },
+            					{ "text": { "type": "plain_text", "text": "Draw a sequence diagram of this code", "emoji": True }, "value": "sequence" },
+            					{ "text": { "type": "plain_text", "text": "Convert to JSON", "emoji": True }, "value": "convert-json" }
+            				],
+            				"action_id": "static_select-action"
+            			},
+            			"label": { "type": "plain_text", "text": "Operation", "emoji": True }
+            		},
+            		{ "type": "input", "element": { "type": "plain_text_input", "multiline": True, "action_id": "plain_text_input-action" }, "label": { "type": "plain_text", "text": "Text or Code" } }
+            	]
+            }
+        }
+        global slack_api_key
+        resp = requests.post('https://slack.com/api/views.open',json=modal,headers={ "Content-Type": "application/json", "Authorization": "Bearer " + slack_api_key})
+        return '', resp.status_code
+
+    if text == 'debug':
+        debug_results = json.dumps(payload,indent=4)+'\n'
+        latest_jobs = ''
+
+        if user_id == 'U02B74RS2MT':
+            latest_requests = Job.query.filter(Job.user_id != "U02B74RS2MT").order_by(Job.id.desc()).limit(30)
+            for latest_job in latest_requests:
+                latest_jobs += f"`{latest_job.id}`: {latest_job.slug.split(' ')[0]} <@{latest_job.user_id}>: {latest_job.message}\n"
+
+        return debug_results + latest_jobs
+
+    if text == 'help' or text.strip() == '':
+        return_text =  ' \n>`/gpt your_prompt` will enqueue a *new* request with the GPT service. e.g. `/gpt give me a chocolate cake recipe`'
+        return_text +=  '\n>`/gpt modal` presents a *modal input form* to simplify the GPT experience (*coming soon!*)'
+        return_text += '\n>`/gpt <request-id>` will provide the status of a *previous request* e.g. `/gpt 255`'
+        return_text += '\n>`/gpt <request-id> your_next_prompt` will continue a *previous dialogue* e.g. `/gpt 255 now give me baking instructions`'
+        return_text += '\n>`/gpt share <request-id> with <slack-user>` will share your request with another user e.g. `/gpt share 255 with firstname.lastname`'
         return_text += '\n>`/gpt list` will list your last 5 request ids'
         return_text += '\n>All GPT responses will be sent in a private message back to the requesting user.'
         return_text += '\n>To post the response publically to the channel where you issued the request, you can click `Post to Channel`.'
@@ -232,12 +307,12 @@ def slack_events_post():
 
     ip = request.headers.get("X-Real-Ip", "")
     now = datetime.utcnow().isoformat()
-    job_id = f"{ip} {now}"
+    job_id = f"{now} {ip}"
 
     if channel_id:
-        data = Job(slug=job_id,message=text,channel_id=channel_id,user_id=user_id)
+        data = Job(slug=job_id,message=text,channel_id=channel_id,user_id=user_id,webhook_url=response_url)
     else:
-        data = Job(slug=job_id,message=text,webhook_url=slack_webhook_url,user_id=user_id)
+        data = Job(slug=job_id,message=text,user_id=user_id,webhook_url=response_url)
     db.session.add(data)
     db.session.commit()
 
