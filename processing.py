@@ -89,7 +89,7 @@ def find_pending_job():
             job.response = "Processing..."
             return job.id
 
-def bot_is_member_of_channel(channel_id, bot_id):
+def bot_is_member_of_channel(channel_id, bot_id, sak=SLACK_API_KEY):
     form_headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Authorization": "Bearer " + SLACK_API_KEY
@@ -111,16 +111,38 @@ def responder(job,gpt_resp):
 
 def PrivateDirectMessage(job, gpt_resp):
     global SLACK_API_KEY
-    payload = {
+    '''payload = {
             "channel": f"{job.user_id}",
             "text": responder(job,gpt_resp)
+    }'''
+    payload = {
+            "channel": f"{job.user_id}",
+            "blocks": [
+        		{
+        			"type": "section",
+        			"text": {
+        				"type": "mrkdwn",
+        				"text": responder(job,gpt_resp)
+        			},
+        			"accessory": {
+        				"type": "button",
+        				"text": {
+        					"type": "plain_text",
+        					"text": "Post to Channel"
+        				},
+        				"value": f"{job.id}",
+        				"action_id": "button-action"
+        			}
+        		}
+        	]
     }
     headers = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": "Bearer " + SLACK_API_KEY
     }
 
-    return requests.post('https://slack.com/api/chat.postMessage', json=payload, headers=headers)
+    #return requests.post('https://slack.com/api/chat.postMessage', json=payload, headers=headers)
+    return requests.post(job.webhook_url, json=payload, headers=headers)
 
 def PrivateMessageInChannel(job, gpt_resp):
     global SLACK_API_KEY
