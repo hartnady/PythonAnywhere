@@ -111,36 +111,109 @@ def slack_get():
 @app.route('/slack/post_to_channel', methods=['POST'])
 def slack_post_to_channel_post():
 
-    mimetype = request.mimetype
-    if mimetype == 'application/x-www-form-urlencoded':
-        data = request.form
-        if 'payload' not in data: abort(500,description='"payload" value missing from form data')
-        payload = json.loads(data['payload'])
+    data = request.form
+    payload = json.loads(data['payload'])
+
+    if payload['type'] == 'view_submission':
+
+        #requests.post(slack_webhook_url,json={ "text": f"{str(payload)}" })
+        #return { "response_action": "clear" }, 200
+
+        values = payload['view']['state']['values']
+        user_id = payload['user']['id']
+        response_url = payload['view']['private_metadata'].split('|')[0]
+        channel_id = payload['view']['private_metadata'].split('|')[1]
+
+        for key in values:
+            for innerKey in payload['view']['state']['values'][key]:
+                if innerKey == 'INPUT_OPERATION':
+                    INPUT_OPERATION = "{}".format(payload['view']['state']['values'][key][innerKey]['selected_option']['value'])
+                elif innerKey == 'INPUT_TEXT':
+                    INPUT_TEXT = "{}".format(payload['view']['state']['values'][key][innerKey]['value'])
+
+        if INPUT_OPERATION == 'translate_en':
+            pre_prompt = 'Translate to English: '
+
+        elif INPUT_OPERATION == 'translate_ru':
+            pre_prompt = 'Translate to Russian: '
+
+        elif INPUT_OPERATION == 'translate_pl':
+            pre_prompt = 'Translate to Polish: '
+
+        elif INPUT_OPERATION == 'summarize':
+            pre_prompt = 'Summarise the following text: '
+
+        elif INPUT_OPERATION == 'fix-grammar':
+            pre_prompt = 'Fix the grammar in the following text: '
+
+        elif INPUT_OPERATION == 'proposal':
+            pre_prompt = 'Acting as a Salesforce implementation and professional services company, consider the following text and then draft a proposal for it: '
+
+        elif INPUT_OPERATION == 'fix-code':
+            pre_prompt = 'The following code is either failing or just needs to be optimized. Fix the code: '
+
+        elif INPUT_OPERATION == 'unit-test':
+            pre_prompt = 'Write an apex unit test to cover the following code: '
+
+        elif INPUT_OPERATION == 'sequence':
+            pre_prompt = 'Convert the following code into sequence diagram notation: '
+
+        elif INPUT_OPERATION == 'convert-json':
+            pre_prompt = 'Acting as an entity recognition expert, convert the following text into a JSON-L document: '
+
+        else:
+            pre_prompt = ''
+
+        final_prompt = pre_prompt + INPUT_TEXT
+
+        ip = request.headers.get("X-Real-Ip", "")
+        now = datetime.utcnow().isoformat()
+        job_id = f"{now} {ip}"
+
+        if channel_id:
+            data = Job(slug=job_id,message=final_prompt,channel_id=channel_id,user_id=user_id,webhook_url=response_url)
+        else:
+            data = Job(slug=job_id,message=final_prompt,user_id=user_id,webhook_url=response_url)
+
+        db.session.add(data)
+        db.session.commit()
+
+        response_action = { "response_action": "update",
+                            "view": {
+                                "type": "modal", "title": { "type": "plain_text", "text": "GPT Responder" },
+                                "close": { "type": "plain_text", "text": "Close" },
+                                "blocks": [ { "type": "section", "text": { "type": "mrkdwn", "text": "Thank you! Your request has been queued.\nTo query the status type `/gpt {}`".format(data.id) } } ]
+                            }
+                          }
+
+        return response_action, 200
+        #return { "response_action": "clear" }, 200
+
+        #return f"Let me think about that!\nTo query status type: `/gpt {data.id}`", 200
+        #return "Let me think about that!", 200
+
     else:
-        abort(500,description="This API only accepts mime-type of application/x-www-form-urlencoded")
 
-    job_id = payload['actions'][0]['value']
-    job = Job.query.filter_by(id=job_id).first()
+        job_id = payload['actions'][0]['value']
+        job = Job.query.filter_by(id=job_id).first()
+        global slack_api_key
 
-    headers = headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "Authorization": "Bearer " + slack_api_key
-    }
+        headers = { "Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + slack_api_key }
 
-    if bot_is_member_of_channel(job.channel_id, chat_bot_user_id, slack_api_key):
-        outbound_payload = { "channel": f"{job.channel_id}", "text": responder(job) }
-        response = requests.post('https://slack.com/api/chat.postMessage', json=outbound_payload, headers=headers)
-    elif job.channel_id[0] != 'C':
-        outbound_payload = { "text": "The GPT App can only post to channels, not to private chats between individuals." }
-        response = requests.post(job.webhook_url, json=outbound_payload, headers=headers)
-    else:
-        outbound_payload = { "text": "The GPT App cannot post to this channel as it is not a member. Please use `/invite @GPT` before attempting to use the 'Post to Channel' feature." }
-        response = requests.post(job.webhook_url, json=outbound_payload, headers=headers)
+        if job.channel_id is None or job.channel_id[0] != 'C':
+            outbound_payload = { "text": "The GPT App can only post to channels, not to private chats between individuals." }
+            response = requests.post(job.webhook_url, json=outbound_payload, headers=headers)
+        elif bot_is_member_of_channel(job.channel_id, chat_bot_user_id, slack_api_key):
+            outbound_payload = { "channel": f"{job.channel_id}", "text": responder(job) }
+            response = requests.post('https://slack.com/api/chat.postMessage', json=outbound_payload, headers=headers)
+        else:
+            outbound_payload = { "text": "The GPT App cannot post to this channel as it is not a member. Please use `/invite @GPT` before attempting to use the 'Post to Channel' feature." }
+            response = requests.post(job.webhook_url, json=outbound_payload, headers=headers)
 
-    if response.status_code == 200:
+        if response.status_code != 200:
+            requests.post(slack_webhook_url, json={ "text": "Unhandled exception ({response.status_code}) while attempting to post to channel. Please consult logs." } )
+
         return '', 200
-    else:
-        return 'Error posting message. Please check server logs.', 200
 
 @app.route('/slack/events', methods=['GET'])
 def slack_events_get():
@@ -162,6 +235,7 @@ def slack_events_post():
     text = payload['text']
     user_id = payload['user_id']
     response_url = payload['response_url']
+    channel_id = ''
 
     if 'channel_id' in payload: channel_id = payload['channel_id']
 
@@ -173,16 +247,18 @@ def slack_events_post():
             "trigger_id": payload['trigger_id'],
             "view": {
             	"type": "modal",
-            	"title": { "type": "plain_text","text": "GPT Modal - Coming Soon!" },
+            	"private_metadata": response_url + '|' + channel_id,
+            	"title": { "type": "plain_text","text": "GPT Operation Handler" },
             	"submit": { "type": "plain_text", "text": "Submit" },
             	"close": { "type": "plain_text", "text": "Cancel" },
             	"blocks": [
-            		{ "type": "section", "text": { "type": "mrkdwn", "text": "This feature is not yet implemented but will be soon. Please select an operation type and prompt" } },
+            		{ "type": "section", "text": { "type": "mrkdwn", "text": "Please select an operation type and prompt:" } },
             		{ "type": "input", "element": {
             		        "type": "static_select",
             		        "placeholder": { "type": "plain_text", "text": "Select an item", "emoji": True },
             				"options": [
-            					{ "text": { "type": "plain_text", "text": "--None--", "emoji": True }, "value": "none" }, { "text": { "type": "plain_text", "text": "Translate to English", "emoji": True }, "value": "translate_en" },
+            					{ "text": { "type": "plain_text", "text": "--None--", "emoji": True }, "value": "none" },
+            					{ "text": { "type": "plain_text", "text": "Translate to English", "emoji": True }, "value": "translate_en" },
             					{ "text": { "type": "plain_text", "text": "Translate to Russian", "emoji": True }, "value": "translate_ru" },
             					{ "text": { "type": "plain_text", "text": "Translate to Polish", "emoji": True }, "value": "translate_pl" },
             					{ "text": { "type": "plain_text", "text": "Summarise the text", "emoji": True }, "value": "summarize" },
@@ -193,17 +269,17 @@ def slack_events_post():
             					{ "text": { "type": "plain_text", "text": "Draw a sequence diagram of this code", "emoji": True }, "value": "sequence" },
             					{ "text": { "type": "plain_text", "text": "Convert to JSON", "emoji": True }, "value": "convert-json" }
             				],
-            				"action_id": "static_select-action"
+            				"action_id": "INPUT_OPERATION"
             			},
             			"label": { "type": "plain_text", "text": "Operation", "emoji": True }
             		},
-            		{ "type": "input", "element": { "type": "plain_text_input", "multiline": True, "action_id": "plain_text_input-action" }, "label": { "type": "plain_text", "text": "Text or Code" } }
+            		{ "type": "input", "element": { "type": "plain_text_input", "multiline": True, "action_id": "INPUT_TEXT" }, "label": { "type": "plain_text", "text": "Text or Code" } }
             	]
             }
         }
         global slack_api_key
-        resp = requests.post('https://slack.com/api/views.open',json=modal,headers={ "Content-Type": "application/json", "Authorization": "Bearer " + slack_api_key})
-        return '', resp.status_code
+        requests.post('https://slack.com/api/views.open',json=modal,headers={ "Content-Type": "application/json", "Authorization": "Bearer " + slack_api_key})
+        return '', 200
 
     if text == 'debug':
         debug_results = json.dumps(payload,indent=4)+'\n'
@@ -218,7 +294,7 @@ def slack_events_post():
 
     if text == 'help' or text.strip() == '':
         return_text =  ' \n>`/gpt your_prompt` will enqueue a *new* request with the GPT service. e.g. `/gpt give me a chocolate cake recipe`'
-        return_text +=  '\n>`/gpt modal` presents a *modal input form* to simplify the GPT experience (*coming soon!*)'
+        return_text +=  '\n>`/gpt modal` presents a *modal input form* to simplify the GPT experience'
         return_text += '\n>`/gpt <request-id>` will provide the status of a *previous request* e.g. `/gpt 255`'
         return_text += '\n>`/gpt <request-id> your_next_prompt` will continue a *previous dialogue* e.g. `/gpt 255 now give me baking instructions`'
         return_text += '\n>`/gpt share <request-id> with <slack-user>` will share your request with another user e.g. `/gpt share 255 with firstname.lastname`'
@@ -272,24 +348,14 @@ def slack_events_post():
 
                     if '@vrpconsulting.com' not in email_lookup: email_lookup += '@vrpconsulting.com'
 
-                    headers = {
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "Authorization": f"Bearer {slack_api_key}"
-                    }
-
+                    headers = { "Content-Type": "application/x-www-form-urlencoded", "Authorization": f"Bearer {slack_api_key}" }
                     response = requests.get('https://slack.com/api/users.lookupByEmail',f'email={email_lookup}', headers=headers)
 
                     if response.status_code == 200 and 'user' in response.json():
                         response_json = response.json()
                         email_lookup_user_id = response_json['user']['id']
-                        headers = {
-                            "Content-Type": "application/json; charset=utf-8",
-                            "Authorization": f"Bearer {slack_api_key}"
-                        }
-                        payload = {
-                            "channel": f"{email_lookup_user_id}",
-                            "text": responder(job)
-                        }
+                        headers = { "Content-Type": "application/json; charset=utf-8", "Authorization": f"Bearer {slack_api_key}" }
+                        payload = { "channel": f"{email_lookup_user_id}", "text": responder(job) }
 
                         user_response = requests.post('https://slack.com/api/chat.postMessage',json=payload, headers=headers)
                         if user_response.status_code == 200:
@@ -318,7 +384,7 @@ def slack_events_post():
 
     #count = Job.query.filter_by(state='queued').count()
 
-    return f'Request placed in queue with id: `{data.id}`.\nTo query the status of this request, type `/gpt {data.id}`', 200
+    return f'Request placed in queue with id: `{data.id}`.\nTo query the status of this request, type `/gpt {data.id}`\nFor a better experience, please consider using `/gpt modal`.', 200
 
 @app.route("/slack/events/<string:job_id>", methods=["GET"])
 def slack_events_status_get(job_id):
@@ -331,6 +397,7 @@ def slack_events_status_get(job_id):
             "result": data.result,
             "message": data.message,
             "user_id": data.user_id,
+            "channel_id": data.channel_id,
             "webhook_url": data.webhook_url,
             "response": data.response
         }
