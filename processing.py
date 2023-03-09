@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_ENGINE_OPTIONS
-from config import OPEN_AI_KEY, SLACK_API_KEY, CHAT_BOT_USER_ID
+from config import OPEN_AI_KEY, SLACK_API_KEY, CHAT_BOT_USER_ID, SLACK_WEBHOOK_URI
 from config import ERROR_SERVICE_SENDER, ERROR_SERVICE_SENDER_TOKEN, ERROR_SERVICE_RECIPIENT
 from flask_app import Job
 
@@ -104,7 +104,7 @@ def bot_is_member_of_channel(channel_id, bot_id, sak=SLACK_API_KEY):
     return False
 
 def responder(job,gpt_resp):
-    msg = job.message.replace('\n','\n>')
+    msg = job.message.replace('\n','\n>')[0:100] + '...'
     resp = gpt_resp.replace('\n','\n>')
     return f"*Request:* `{job.id}`\n*<@{job.user_id}> asked:*\n>{msg}\n*GPT Responded:*\n>{resp}"
     #return f"*Request:* `{job.id}`:\n<@{job.user_id}> asked: {job.message}\n*GPT Responded:*\n>{gpt_resp}"
@@ -136,10 +136,7 @@ def PrivateDirectMessage(job, gpt_resp):
         		}
         	]
     }
-    headers = {
-            "Content-Type": "application/json; charset=utf-8",
-            "Authorization": "Bearer " + SLACK_API_KEY
-    }
+    headers = { "Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + SLACK_API_KEY }
 
     #return requests.post('https://slack.com/api/chat.postMessage', json=payload, headers=headers)
     return requests.post(job.webhook_url, json=payload, headers=headers)
@@ -169,48 +166,57 @@ def PrivateMessageInChannel(job, gpt_resp):
         	]
     }
 
-    headers = {
-            "Content-Type": "application/json; charset=utf-8",
-            "Authorization": "Bearer " + SLACK_API_KEY
-    }
+    headers = { "Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + SLACK_API_KEY }
 
     return requests.post('https://slack.com/api/chat.postEphemeral', json=payload, headers=headers)
 
 def process_job(job_id):
     print(f"Processing job: {job_id}...", end=" ", flush=True)
 
-    with Session.begin() as session:
-        job = session.query(Job).filter_by(id=job_id).first()
-        gpt_response = gpt_chat(job.message) #gpt_complete(job.message)
+    try:
 
-        if job.channel_id is None or job.channel_id == '':
-            response = PrivateDirectMessage(job,gpt_response)
-        else:
-            c_id = job.channel_id
-            if c_id[0] == 'C' and bot_is_member_of_channel(c_id,CHAT_BOT_USER_ID):
-                response = PrivateMessageInChannel(job,gpt_response)
-            else:
+        with Session.begin() as session:
+            job = session.query(Job).filter_by(id=job_id).first()
+            gpt_response = gpt_chat(job.message) #gpt_complete(job.message)
+
+            if job.channel_id is None or job.channel_id == '':
                 response = PrivateDirectMessage(job,gpt_response)
+            else:
+                c_id = job.channel_id
+                if c_id[0] == 'C' and bot_is_member_of_channel(c_id,CHAT_BOT_USER_ID):
+                    response = PrivateMessageInChannel(job,gpt_response)
+                else:
+                    response = PrivateDirectMessage(job,gpt_response)
 
-        if response.status_code == 200:
+            if response.status_code == 200:
 
-            with Session.begin() as session:
-                session.query(Job).filter_by(id=job_id).update(
-                    {"result": 1, "state": "completed", "response": gpt_response}
-                )
+                with Session.begin() as session:
+                    session.query(Job).filter_by(id=job_id).update(
+                        {"result": 1, "state": "completed", "response": gpt_response}
+                    )
 
-            print(f"{job_id} is complete.")
+                print(f"{job_id} is complete.")
 
-        else:
+            else:
 
-            with Session.begin() as session:
-                session.query(Job).filter_by(id=job_id).update(
-                    {"result": 0, "state": "failed" }
-                )
+                with Session.begin() as session:
+                    session.query(Job).filter_by(id=job_id).update(
+                        {"result": 0, "state": "failed", "response": "GPT request `{}` failed. Please try again later. Error:{}".format(job_id,response.text) }
+                    )
 
-            print(f"{job_id} failed to process.")
-            print(f"{response.content}")
+                print(f"{job_id} failed to process.")
+                print(f"{response.text}")
 
+                requests.post(SLACK_WEBHOOK_URI, json={ "text": "GPT request `{}` failed. Please try again later. Error: {}".format(job_id,response.text) } )
+
+    except Exception as e:
+
+        with Session.begin() as session:
+            session.query(Job).filter_by(id=job_id).update(
+                {"result": 0, "state": "failed", "response": e }
+            )
+
+        requests.post(SLACK_WEBHOOK_URI, json={ "text": "GPT request `{}` failed. Please try again later. Error: {}".format(job_id,str(e)) } )
 
 if __name__ == "__main__":
     print('Waiting for first job...')
