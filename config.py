@@ -1,5 +1,5 @@
 # Database setup
-username = "your_username_here2"
+username = "your_username_here"
 password = "your_database_password_here"
 hostname = f"{username}.mysql.pythonanywhere-services.com"
 databasename = f"{username}$asyncinweb"
