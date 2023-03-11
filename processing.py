@@ -3,7 +3,7 @@ from email.message import Message
 from email.utils import formataddr
 from smtplib import SMTPAuthenticationError
 
-import requests, openai, traceback
+import requests, openai #, traceback
 from time import sleep
 
 from sqlalchemy import create_engine
@@ -58,8 +58,9 @@ def gpt_chat(prompt):
             completion_text = response.choices[0]['message']['content'].strip()
             return completion_text
     except Exception as e:
-        error_traceback = traceback.format_exc()
-        return f"REST Error: {str(e)}\n{error_traceback}"
+        #error_traceback = traceback.format_exc()
+        return f"The GPT API is temporarily down.\nPlease check https://status.openai.com\n{str(e)}"
+        #\n\nStack trace:\n{error_traceback}"
 
 '''def gpt_complete(prompt):
     params = {
